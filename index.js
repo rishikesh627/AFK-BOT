@@ -15,6 +15,7 @@ let config;
 try {
   config = JSON.parse(fs.readFileSync("config.json"));
 } catch {
+  console.log("[CONFIG] config.json missing or invalid");
   process.exit(1);
 }
 
@@ -105,8 +106,8 @@ function typingSim(threadID, duration = 1000) {
   } catch {}
 }
 
-// ---------- STATE ----------
-const stateFile = "./spam_state.json";
+// ---------- STATE (Render pe /tmp use karo) ----------
+const stateFile = "/tmp/spam_state.json";
 
 let persisted = {};
 try {
@@ -120,7 +121,11 @@ let spamIndexes = {};
 const idleTimers = {};
 
 function saveState() {
-  fs.writeFileSync(stateFile, JSON.stringify(persisted, null, 2));
+  try {
+    fs.writeFileSync(stateFile, JSON.stringify(persisted, null, 2));
+  } catch (e) {
+    // read-only fs pe silently ignore
+  }
 }
 
 // ---------- ANDAR LOOP ----------
@@ -382,17 +387,44 @@ function startListener() {
 
 // ---------- START ----------
 function startBot() {
-  const loginData = fs.existsSync("appstate.json")
-    ? { appState: JSON.parse(fs.readFileSync("appstate.json")) }
-    : { email: config.email, password: config.password };
+  let loginData;
+
+  // 1st priority: environment variable (Render ke liye best)
+  if (process.env.APPSTATE) {
+    try {
+      loginData = { appState: JSON.parse(process.env.APPSTATE) };
+      console.log("[LOGIN] Using APPSTATE from env var");
+    } catch (e) {
+      console.log("[LOGIN] APPSTATE env var invalid JSON:", e.message);
+      return;
+    }
+  }
+  // 2nd priority: appstate.json file
+  else if (fs.existsSync("appstate.json")) {
+    loginData = { appState: JSON.parse(fs.readFileSync("appstate.json")) };
+    console.log("[LOGIN] Using appstate.json file");
+  }
+  // 3rd: email/password
+  else {
+    loginData = { email: config.email, password: config.password };
+    console.log("[LOGIN] Using email/password (risky)");
+  }
 
   login(loginData, (err, apiInstance) => {
-    if (err) return console.log(err);
+    if (err) {
+      console.log("[LOGIN FAILED]", err.message || err);
+      return;
+    }
 
     api = apiInstance;
 
-    fs.writeFileSync("appstate.json", JSON.stringify(api.getAppState(), null, 2));
+    try {
+      fs.writeFileSync("appstate.json", JSON.stringify(api.getAppState(), null, 2));
+    } catch (e) {
+      console.log("[WARN] Could not save appstate.json:", e.message);
+    }
 
+    console.log("[LOGIN SUCCESS] Bot started ✅");
     startListener();
   });
 }
@@ -401,4 +433,8 @@ function startBot() {
 const app = express();
 app.get("/", (_, res) => res.send("running"));
 
-app.listen(3000, () => startBot());
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`[SERVER] Listening on port ${PORT}`);
+  startBot();
+});
